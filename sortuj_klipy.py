@@ -230,6 +230,10 @@ def get_drive_service(token_json):
 
 
 def list_all(service, query, fields):
+    # W trybie podgladu foldery "do utworzenia" maja sztuczne ID (DRYRUN_...).
+    # Takiego folderu nie ma na Dysku, wiec nie wolno o niego pytac - zwracamy pusto.
+    if "DRYRUN_" in query:
+        return []
     items, token = [], None
     while True:
         res = service.files().list(
