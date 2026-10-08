@@ -1,0 +1,47 @@
+name: Sortowanie klipow
+
+on:
+  # Uruchamia Make, gdy w Notion zaznaczysz "Posortuj klipy" na stronie odcinka.
+  repository_dispatch:
+    types: [sortuj-klipy]
+  # Reczne uruchomienie (test): Actions > Sortowanie klipow > Run workflow.
+  workflow_dispatch:
+    inputs:
+      page_id:
+        description: "ID strony odcinka w Notion"
+        required: true
+      dry_run:
+        description: "true = tylko podglad, nic nie przenosi"
+        default: "true"
+      force:
+        description: "1 = uruchom nawet gdy pole Posortuj klipy nie jest zaznaczone"
+        default: "1"
+
+# Jedno sortowanie na odcinek naraz, kolejne czekaja w kolejce.
+concurrency:
+  group: sortuj-${{ github.event.client_payload.page_id || github.event.inputs.page_id }}
+  cancel-in-progress: false
+
+jobs:
+  sortuj:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Testy (szybka kontrola, ze skrypt jest sprawny)
+        run: python -m unittest discover -s tests
+      - name: Sortuj klipy
+        run: python sortuj_klipy.py
+        env:
+          PAGE_ID: ${{ github.event.client_payload.page_id || github.event.inputs.page_id }}
+          # Zmienna repozytorium DRY_RUN: "true" = podglad (domyslnie), "false" = naprawde przenosi.
+          DRY_RUN: ${{ github.event.inputs.dry_run || vars.DRY_RUN || 'true' }}
+          FORCE: ${{ github.event.inputs.force || '' }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          RESULT_WEBHOOK_URL: ${{ secrets.RESULT_WEBHOOK_URL }}
