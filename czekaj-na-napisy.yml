@@ -1,0 +1,34 @@
+name: Czekanie na napisy
+
+on:
+  # Sprawdza co ok. 30 minut, od 6:00 do 22:00 czasu polskiego (UTC 4-20).
+  schedule:
+    - cron: "7,37 4-20 * * *"
+  # Reczne uruchomienie (test): Actions > Czekanie na napisy > Run workflow.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = tylko sprawdza, nic nie zmienia w Notion"
+        default: "true"
+
+# Tylko jedno sprawdzanie naraz.
+concurrency:
+  group: czekaj-na-napisy
+  cancel-in-progress: false
+
+jobs:
+  sprawdz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Sprawdz napisy
+        run: python czekaj_na_napisy.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
