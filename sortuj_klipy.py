@@ -605,9 +605,10 @@ def poll_all(notion, config_path, dry_run, webhook):
         try:
             pages = notion.query_flagged(db_id)
         except Exception as exc:  # noqa: BLE001 - jeden zepsuty klient nie blokuje reszty
-            print(f"[{name}] nie moge odczytac bazy odcinkow: {exc}")
-            notify(webhook, f"Sortowanie klipow, {name}: nie moge odczytac bazy odcinkow w Notion. {exc}")
-            code = 1
+            # Bez powiadomienia na Slacka: tryb cykliczny dziala co 15 min, wiec ten sam
+            # blad (np. brak dostepu integracji do bazy) zalewalby Slacka i zuzywal kredyty Make.
+            print(f"[{name}] OSTRZEZENIE: nie moge odczytac bazy odcinkow (dodaj integracje "
+                  f"w Notion: ... > Connections): {str(exc)[:300]}")
             continue
         print(f"[{name}] odcinkow do posortowania: {len(pages)}")
         for page in pages:
