@@ -157,6 +157,23 @@ class Notion:
     def patch_page(self, page_id, properties):
         return self._call("PATCH", f"/v1/pages/{page_id}", json={"properties": properties})
 
+    def patch_raw(self, page_id, body):
+        return self._call("PATCH", f"/v1/pages/{page_id}", json=body)
+
+    def query_published(self, database_id):
+        """Odcinki ze statusem Opublikowane."""
+        rows, cursor = [], None
+        while True:
+            body = {"page_size": 100,
+                    "filter": {"property": "Status", "select": {"equals": "Opublikowane"}}}
+            if cursor:
+                body["start_cursor"] = cursor
+            data = self._call("POST", f"/v1/databases/{database_id}/query", json=body)
+            rows.extend(data.get("results", []))
+            if not data.get("has_more"):
+                return rows
+            cursor = data["next_cursor"]
+
     def query_flagged(self, database_id):
         """Strony odcinkow z zaznaczonym 'Posortuj klipy'."""
         rows, cursor = [], None
