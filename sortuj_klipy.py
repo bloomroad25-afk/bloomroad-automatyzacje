@@ -1,7 +1,13 @@
 """
 SORTOWANIE SUROWYCH KLIPOW - WERSJA AUTOMATYCZNA (jeden odcinek na uruchomienie)
 ==============================================================================
-Uruchamiana przez GitHub Actions po zaznaczeniu "Posortuj klipy" w Notion.
+Uruchamiana przez GitHub Actions po zaznaczeniu "Posortuj klipy" w Notion:
+  - z PAGE_ID: jeden odcinek (Make wywoluje to dla Bloomroada od razu),
+  - bez PAGE_ID: tryb cykliczny - co 15 min przeglada bazy z pliku
+    sortowanie_klienci.json (Drony, Pavisorte, GeoSite...) i sortuje zaznaczone.
+Drony maja Cam 1 i Cam 2 w jednym wierszu Logow klipow ("Numer klipu Cam 1",
+"Numer klipu (Cam 2)") - skrypt rozbija taki wiersz na dwa klipy. Kamera jest
+rozpoznawana tez po nazwie folderu (np. pliki DJI w folderze "Cam 1").
 Logika Dysku Google jest taka sama jak w wersji interaktywnej (sortowanie do
 folderow odcinek/kamera, zmiana nazw, "nie git" do folderu "kosz", notatki dla
 montazysty, kontrola ciaglosci numeracji). Zmienilo sie tylko to, skad skrypt
@@ -151,6 +157,20 @@ class Notion:
     def patch_page(self, page_id, properties):
         return self._call("PATCH", f"/v1/pages/{page_id}", json={"properties": properties})
 
+    def query_flagged(self, database_id):
+        """Strony odcinkow z zaznaczonym 'Posortuj klipy'."""
+        rows, cursor = [], None
+        while True:
+            body = {"page_size": 100,
+                    "filter": {"property": "Posortuj klipy", "checkbox": {"equals": True}}}
+            if cursor:
+                body["start_cursor"] = cursor
+            data = self._call("POST", f"/v1/databases/{database_id}/query", json=body)
+            rows.extend(data.get("results", []))
+            if not data.get("has_more"):
+                return rows
+            cursor = data["next_cursor"]
+
     def query_clips(self, database_id, relation_prop, page_id):
         rows, cursor = [], None
         while True:
@@ -176,6 +196,47 @@ def parse_clip(page):
         "ocena": prop_text(find_prop(props, "ocena")).strip().lower(),
         "uwagi": prop_text(find_prop(props, "uwagi")).replace("\n", " ").strip(),
     }
+
+
+def number_props(props):
+    """Zwraca liste (kamera lub None, wlasciwosc) dla kolumn z numerem klipu.
+
+    Zwykla baza ma jedna kolumne "Numer klipu" (kamera jest w osobnej kolumnie).
+    Drony maja dwie: "Numer klipu Cam 1" i "Numer klipu (Cam 2)" - w jednym wierszu
+    numer z kazdej kamery. Wtedy kamera wynika z nazwy kolumny."""
+    out = []
+    for key, prop in props.items():
+        n = norm(key)
+        if not (n.startswith("numerklipu") or n.startswith("numerpliku")):
+            continue
+        m = re.search(r"cam(?:era)?(\d)", n)
+        out.append((f"Cam {m.group(1)}" if m else None, prop))
+    return out
+
+
+def expand_clip(page):
+    """Jeden wiersz Logow klipow -> lista klipow (po jednym na kamere)."""
+    props = page["properties"]
+    base = parse_clip(page)
+    per_cam = [(cam, p) for cam, p in number_props(props) if cam]
+    if not per_cam:
+        return [base]
+    filled = []
+    for cam, prop in per_cam:
+        m = re.search(r"\d+", prop_text(prop))
+        if m:  # puste = ta kamera nie nagrala tego ujecia
+            filled.append((cam, int(m.group(0))))
+    # Stare wiersze (jeden wiersz = jedna kamera): jest jeden numer i ustawiona
+    # kamera w kolumnie "Kamera / zrodlo" - wtedy ta kolumna decyduje.
+    if len(filled) == 1 and base["kamera"]:
+        filled = [(base["kamera"], filled[0][1])]
+    out = []
+    for cam, numer in filled:
+        item = dict(base)
+        item["numer"] = numer
+        item["kamera"] = cam
+        out.append(item)
+    return out
 
 
 def load_episode(notion, page_id):
@@ -206,7 +267,8 @@ def load_episode(notion, page_id):
         if not db_id:
             raise RuntimeError("Nie udalo sie ustalic bazy Logi klipow.")
         relation_prop = os.environ.get("CLIPS_RELATION_PROP", "Odcinek")
-        clips = [parse_clip(p) for p in notion.query_clips(db_id, relation_prop, page_id)]
+        clips = [c for p in notion.query_clips(db_id, relation_prop, page_id)
+                 for c in expand_clip(p)]
     return title, flag, flag_key, surowka, clips
 
 
@@ -249,6 +311,7 @@ def list_all(service, query, fields):
 def subfolders_recursive(service, parent_id):
     out = []
     for child in list_all(service, f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' and trashed=false", "id, name"):
+        child["parent"] = parent_id
         out.append(child)
         out.extend(subfolders_recursive(service, child["id"]))
     return out
@@ -287,30 +350,54 @@ def write_notes(service, folder_id, content, dry_run):
                                media_body=media, supportsAllDrives=True).execute(num_retries=3)
 
 
-def scan_video_files(service, folder_ids):
+VIDEO_EXT = (".mp4", ".mov")
+
+
+def folder_context(folder_id, info, root_id):
+    """Nazwy folderow od pliku w gore (bez folderu glownego), male litery."""
+    names, seen = [], set()
+    while folder_id and folder_id != root_id and folder_id in info and folder_id not in seen:
+        seen.add(folder_id)
+        names.append(info[folder_id]["name"].lower())
+        folder_id = info[folder_id].get("parent")
+    return " ".join(names)
+
+
+def scan_video_files(service, folder_ids, info=None, root_id=None):
     files = []
+    info = info or {}
     for fid in folder_ids:
+        ctx = folder_context(fid, info, root_id)
         for f in list_all(service, f"'{fid}' in parents and trashed=false", "id, name, parents"):
-            if f["name"].lower().endswith(".mp4"):
+            if f["name"].lower().endswith(VIDEO_EXT):
+                f["ctx"] = ctx
                 files.append(f)
     return files
+
+
+def camera_of(f):
+    hay = (f["name"] + " " + f.get("ctx", "")).lower().replace(" ", "")
+    for key in ("cam1", "cam2", "cam3", "cam4"):
+        if key in hay:
+            return key
+    if "dji" in hay:
+        return "dji"
+    return None
+
+
+def clip_number_of(name):
+    stem = name.lower().rsplit(".", 1)[0]
+    nums = re.findall(r"(?<!\d)(\d{4})(?!\d)", stem)
+    return int(nums[-1]) if nums else None
 
 
 def drive_gaps(files):
     """Zwraca liste linii opisujacych luki w numeracji plikow na Dysku."""
     clips = {}
     for f in files:
-        n = f["name"].lower()
-        cam = None
-        if "cam1" in n or "cam 1" in n:
-            cam = "cam1"
-        elif "cam2" in n or "cam 2" in n:
-            cam = "cam2"
-        elif "dji" in n:
-            cam = "dji"
-        m = re.search(r"(\d{4})\.mp4$", n)
-        if cam and m:
-            clips.setdefault(cam, set()).add(int(m.group(1)))
+        cam, n = camera_of(f), clip_number_of(f["name"])
+        if cam and n is not None:
+            clips.setdefault(cam, set()).add(n)
     lines = []
     for cam, nums in sorted(clips.items()):
         missing = sorted(set(range(min(nums), max(nums) + 1)) - nums)
@@ -325,14 +412,33 @@ def fmt_nums(nums, limit=15):
     return shown + (f" i {len(nums) - limit} wiecej" if len(nums) > limit else "")
 
 
-def find_matching_file(files, number4, camera):
+SORTED_RE = re.compile(r"^cam\d_.+_\d{4}\.[a-z0-9]+$")
+
+
+def find_matching_file(files, number4, camera, episode_clean="", trash_id=None, want_trash=False):
+    """Wybiera plik z Dysku dla klipu. Kolejnosc: plik tego odcinka (ponowne
+    uruchomienie) > surowy plik > plik w koszu. Pliki juz posortowane do INNYCH
+    odcinkow sa pomijane (te same numery moga wystapic dwa razy)."""
     cam_key = camera.lower().replace(" ", "")
     num_re = re.compile(rf"(?<!\d){number4}(?!\d)")
+    best, best_rank = None, None
     for f in files:
         low = f["name"].lower()
-        if cam_key in low.replace(" ", "") and num_re.search(low):
-            return f
-    return None
+        hay = (low + " " + f.get("ctx", "")).replace(" ", "")
+        if cam_key not in hay or not num_re.search(low):
+            continue
+        in_trash = bool(trash_id and trash_id in f.get("parents", []))
+        if episode_clean and low.startswith(f"{cam_key}_{episode_clean.lower()}_"):
+            rank = 0
+        elif SORTED_RE.match(low) and not in_trash:
+            continue  # posortowany do innego odcinka
+        else:
+            rank = 1
+        if in_trash:
+            rank = 0 if want_trash else 2
+        if best_rank is None or rank < best_rank:
+            best, best_rank = f, rank
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +451,10 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
     episode = ascii_fold(episode)
 
     trash_id = find_or_create_folder(service, "kosz", root_id, cache, dry_run)
-    folders = [root_id] + [f["id"] for f in subfolders_recursive(service, root_id)]
-    files = scan_video_files(service, folders)
+    subs = subfolders_recursive(service, root_id)
+    info = {f["id"]: f for f in subs}
+    folders = [root_id] + [f["id"] for f in subs]
+    files = scan_video_files(service, folders, info, root_id)
     result["gaps"] = drive_gaps(files)
     log(f"Na Dysku znaleziono {len(files)} plikow .mp4.")
 
@@ -360,7 +468,8 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
             result["no_camera"].append(numer)
             continue
         number4 = f"{numer:04d}"
-        found = find_matching_file(files, number4, camera)
+        found = find_matching_file(files, number4, camera, episode_clean, trash_id,
+                                   want_trash=(clip["ocena"] == "nie git"))
         if not found:
             result["missing"].setdefault(camera, []).append(numer)
             continue
@@ -382,7 +491,8 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
         if clip["etap"]:
             parts.append(clean_filename(clip["etap"]))
         parts.append(number4)
-        new_name = "_".join(parts) + ".mp4"
+        ext = ".mov" if found["name"].lower().endswith(".mov") else ".mp4"
+        new_name = "_".join(parts) + ext
 
         if camera_folder not in parents:
             if not dry_run:
@@ -406,8 +516,8 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
     return result
 
 
-def build_summary(episode, result, dry_run, error=None):
-    head = f"Sortowanie klipow, {episode or 'odcinek'}"
+def build_summary(episode, result, dry_run, error=None, klient=""):
+    head = f"Sortowanie klipow, {klient + ', ' if klient else ''}{episode or 'odcinek'}"
     if dry_run:
         head += " (PODGLAD, nic nie przeniesiono)"
     if error:
@@ -433,16 +543,8 @@ def notify(webhook, text):
         print(f"Nie udalo sie wyslac powiadomienia: {exc}")
 
 
-def main():
-    page_id = os.environ.get("PAGE_ID", "").strip()
-    dry_run = os.environ.get("DRY_RUN", "true").strip().lower() in ("1", "true", "yes", "tak")
-    webhook = os.environ.get("RESULT_WEBHOOK_URL", "").strip()
-    force = os.environ.get("FORCE", "").strip() in ("1", "true", "yes")
-    if not page_id:
-        print("Brak PAGE_ID.")
-        return 1
-
-    notion = Notion(os.environ["NOTION_TOKEN"])
+def process_episode(notion, page_id, dry_run, webhook, force=False, klient=""):
+    """Sortuje klipy jednego odcinka, odznacza pole i wysyla podsumowanie. Zwraca 0/1."""
     episode, flag_key, error, result = "", None, None, None
     try:
         episode, flag, flag_key, surowka, clips = load_episode(notion, page_id)
@@ -460,7 +562,7 @@ def main():
         error = str(exc)
         print(f"BLAD: {error}")
 
-    summary = build_summary(episode, result, dry_run, error)
+    summary = build_summary(episode, result, dry_run, error, klient)
     print(summary)
     notify(webhook, summary)
 
@@ -470,6 +572,42 @@ def main():
         except Exception as exc:  # noqa: BLE001
             print(f"Nie udalo sie odznaczyc pola: {exc}")
     return 1 if error else 0
+
+
+def load_clients(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def poll_all(notion, config_path, dry_run, webhook):
+    """Tryb cykliczny: przeglada bazy Odcinki wszystkich klientow z pliku
+    sortowanie_klienci.json i sortuje kazdy odcinek z zaznaczonym 'Posortuj klipy'."""
+    code = 0
+    for client in load_clients(config_path):
+        name, db_id = client["klient"], client["odcinki_db"]
+        try:
+            pages = notion.query_flagged(db_id)
+        except Exception as exc:  # noqa: BLE001 - jeden zepsuty klient nie blokuje reszty
+            print(f"[{name}] nie moge odczytac bazy odcinkow: {exc}")
+            notify(webhook, f"Sortowanie klipow, {name}: nie moge odczytac bazy odcinkow w Notion. {exc}")
+            code = 1
+            continue
+        print(f"[{name}] odcinkow do posortowania: {len(pages)}")
+        for page in pages:
+            code |= process_episode(notion, page["id"], dry_run, webhook, force=True, klient=name)
+    return code
+
+
+def main():
+    page_id = os.environ.get("PAGE_ID", "").strip()
+    dry_run = os.environ.get("DRY_RUN", "true").strip().lower() in ("1", "true", "yes", "tak")
+    webhook = os.environ.get("RESULT_WEBHOOK_URL", "").strip()
+    force = os.environ.get("FORCE", "").strip() in ("1", "true", "yes")
+    notion = Notion(os.environ["NOTION_TOKEN"])
+    if page_id:
+        return process_episode(notion, page_id, dry_run, webhook, force)
+    config = os.environ.get("CLIENTS_FILE", "sortowanie_klienci.json")
+    return poll_all(notion, config, dry_run, webhook)
 
 
 if __name__ == "__main__":
