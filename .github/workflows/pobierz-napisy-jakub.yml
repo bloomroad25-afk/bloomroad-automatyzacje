@@ -1,0 +1,38 @@
+name: Pobieranie napisow - Jakub Wolert
+
+on:
+  # Co godzine, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
+  schedule:
+    - cron: "22 4-20 * * *"
+  # Reczne uruchomienie (test): Actions > Pobieranie napisow - Jakub Wolert > Run workflow.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = tylko sprawdza, nic nie zapisuje"
+        default: "true"
+
+# Tylko jedno sprawdzanie naraz.
+concurrency:
+  group: pobierz-napisy-jakub
+  cancel-in-progress: false
+
+jobs:
+  sprawdz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Pobierz napisy (Jakub Wolert)
+        run: python pobierz_napisy.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JAKUB }}
+          # Baza "Odcinki - Jakub Wolert"
+          DATA_SOURCE_ID: "f9ba4c1c-5a3c-4ab1-9cc2-0f5b4469059c"
+          # Baza "Napisy YouTube - Jakub Wolert (automat - nie ruszac)"
+          NAPISY_DATA_SOURCE_ID: "6023a820-b4e0-40f4-a9f0-6a5749bf72a8"
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
