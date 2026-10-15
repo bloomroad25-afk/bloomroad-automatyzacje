@@ -408,18 +408,38 @@ def clip_number_of(name):
     return int(nums[-1]) if nums else None
 
 
-def drive_gaps(files):
-    """Zwraca liste linii opisujacych luki w numeracji plikow na Dysku."""
-    clips = {}
+MAX_GAP = 50  # dluzsza dziura (tyle numerow z rzedu) to raczej inne nagranie w folderze, nie brakujace pliki
+
+
+def drive_gaps(files, clips=None, exclude=None, max_gap=MAX_GAP):
+    """Zwraca linie o mozliwie nieprzeslanych plikach: krotkich dziurach w numeracji
+    POMIEDZY plikami, ktore sa na Dysku, w zakresie klipow tego odcinka (per kamera).
+    Duze skoki numeracji (inne nagrania w folderze) sa pomijane. 'exclude' to numery,
+    ktore i tak sa zglaszane osobno jako 'Brak na Dysku'."""
+    exclude = exclude or {}
+    ranges = {}
+    for c in clips or []:
+        if c.get("numer") is None or not c.get("kamera"):
+            continue
+        cam = c["kamera"].lower().replace(" ", "")
+        lo, hi = ranges.get(cam, (c["numer"], c["numer"]))
+        ranges[cam] = (min(lo, c["numer"]), max(hi, c["numer"]))
+    present = {}
     for f in files:
         cam, n = camera_of(f), clip_number_of(f["name"])
         if cam and n is not None:
-            clips.setdefault(cam, set()).add(n)
+            present.setdefault(cam, set()).add(n)
     lines = []
-    for cam, nums in sorted(clips.items()):
-        missing = sorted(set(range(min(nums), max(nums) + 1)) - nums)
-        if missing:
-            lines.append(f"{cam.upper()}: brakuje plikow {fmt_nums(missing)}")
+    for cam, (lo, hi) in sorted(ranges.items()):
+        nums = sorted(present.get(cam, ()))
+        skip = {n for key, vals in exclude.items()
+                if key.lower().replace(" ", "") == cam for n in vals}
+        gaps = []
+        for a, b in zip(nums, nums[1:]):
+            if 1 <= b - a - 1 <= max_gap:
+                gaps += [n for n in range(a + 1, b) if lo <= n <= hi and n not in skip]
+        if gaps:
+            lines.append(f"{cam.upper()}: brakuje {fmt_nums(gaps)}")
     return lines
 
 
@@ -472,7 +492,6 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
     info = {f["id"]: f for f in subs}
     folders = [root_id] + [f["id"] for f in subs]
     files = scan_video_files(service, folders, info, root_id)
-    result["gaps"] = drive_gaps(files)
     log(f"Na Dysku znaleziono {len(files)} plikow .mp4.")
 
     episode_clean = clean_filename(episode)
@@ -527,6 +546,7 @@ def sort_clips(service, root_id, episode, clips, dry_run, log=print):
         if clip["uwagi"]:
             notes.setdefault(episode_folder, []).append(f"[{new_name}]: {ascii_fold(clip['uwagi'])}")
 
+    result["gaps"] = drive_gaps(files, clips, exclude=result["missing"])
     for folder_id, lines in notes.items():
         write_notes(service, folder_id, "NOTATKI DLA MONTAZYSTY:\n\n" + "\n".join(lines), dry_run)
     result["notes_folders"] = len(notes)
@@ -547,7 +567,7 @@ def build_summary(episode, result, dry_run, error=None, klient=""):
     if result["no_camera"]:
         text += f" Bez kamery w Notion: {fmt_nums(result['no_camera'])}."
     if result["gaps"]:
-        text += " Luki w numeracji plikow: " + "; ".join(result["gaps"]) + "."
+        text += " Mozliwe nieprzeslane pliki (dziura w numeracji): " + "; ".join(result["gaps"]) + "."
     return text
 
 
