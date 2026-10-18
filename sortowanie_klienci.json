@@ -1,5 +1,8 @@
 [
   {"klient": "Drony", "odcinki_db": "80d7ad30-2d28-4019-8bf0-87ab8091e9d9"},
   {"klient": "Pavisorte", "odcinki_db": "4e54fec2-e840-4231-aa91-248d1d37b6a5"},
-  {"klient": "GeoSite", "odcinki_db": "b1ba99ab-86e9-4aee-855e-869d26eedabd"}
+  {"klient": "GeoSite", "odcinki_db": "b1ba99ab-86e9-4aee-855e-869d26eedabd"},
+  {"klient": "Bloomroad", "odcinki_db": "9f039123-857a-4889-883e-50dc17277db8"},
+  {"klient": "Jakub Wolert", "odcinki_db": "0b245429-0d65-4bdf-b9c4-d26939f66623"},
+  {"klient": "Woda", "odcinki_db": "99996cda-9449-45a9-a45a-d9c474f481d8"}
 ]
