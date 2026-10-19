@@ -188,6 +188,24 @@ class Notion:
                 return rows
             cursor = data["next_cursor"]
 
+    def get_database(self, database_id):
+        return self._call("GET", f"/v1/databases/{database_id}")
+
+    def query_orphans(self, logi_db_id):
+        """Klipy z ocena Git, ktore nie sa przypisane do zadnego odcinka."""
+        rows, cursor = [], None
+        while True:
+            body = {"page_size": 100, "filter": {"and": [
+                {"property": "Odcinek", "relation": {"is_empty": True}},
+                {"property": "Ocena", "select": {"equals": "Git"}}]}}
+            if cursor:
+                body["start_cursor"] = cursor
+            data = self._call("POST", f"/v1/databases/{logi_db_id}/query", json=body)
+            rows.extend(data.get("results", []))
+            if not data.get("has_more"):
+                return rows
+            cursor = data["next_cursor"]
+
     def query_clips(self, database_id, relation_prop, page_id):
         rows, cursor = [], None
         while True:
@@ -580,7 +598,7 @@ def notify(webhook, text):
         print(f"Nie udalo sie wyslac powiadomienia: {exc}")
 
 
-def process_episode(notion, page_id, dry_run, webhook, force=False, klient=""):
+def process_episode(notion, page_id, dry_run, webhook, force=False, klient="", collect=None):
     """Sortuje klipy jednego odcinka, odznacza pole i wysyla podsumowanie. Zwraca 0/1."""
     episode, flag_key, error, result = "", None, None, None
     try:
@@ -601,7 +619,10 @@ def process_episode(notion, page_id, dry_run, webhook, force=False, klient=""):
 
     summary = build_summary(episode, result, dry_run, error, klient)
     print(summary)
-    notify(webhook, summary)
+    if collect is not None:
+        collect.append(summary)  # tryb cykliczny: jedna wiadomosc na caly przebieg
+    else:
+        notify(webhook, summary)
 
     if flag_key:  # odznacz, zeby dalo sie zaznaczyc ponownie
         try:
@@ -616,10 +637,32 @@ def load_clients(path):
         return json.load(fh)
 
 
+def orphan_clips(notion, odcinki_db):
+    """Klipy z ocena Git bez odcinka: {kamera: [numery]}. Tylko odczyt."""
+    db = notion.get_database(odcinki_db)
+    logi_db = None
+    for key, prop in db.get("properties", {}).items():
+        if norm(key) == "logiklipow" and prop.get("type") == "relation":
+            logi_db = prop["relation"].get("database_id")
+            break
+    if not logi_db:
+        return {}
+    out = {}
+    for page in notion.query_orphans(logi_db):
+        for clip in expand_clip(page):
+            if clip["numer"] is not None:
+                out.setdefault(clip["kamera"] or "bez kamery", []).append(clip["numer"])
+    return out
+
+
 def poll_all(notion, config_path, dry_run, webhook):
     """Tryb cykliczny: przeglada bazy Odcinki wszystkich klientow z pliku
-    sortowanie_klienci.json i sortuje kazdy odcinek z zaznaczonym 'Posortuj klipy'."""
+    sortowanie_klienci.json i sortuje kazdy odcinek z zaznaczonym 'Posortuj klipy'.
+    Na koniec wysyla JEDNA wiadomosc z podsumowaniem calego przebiegu (oszczedza
+    kredyty Make). Do wiadomosci dopisuje klipy z ocena Git bez odcinka - ale tylko
+    dla klientow, u ktorych w tym przebiegu cos sortowano (zeby nie powtarzac co 15 min)."""
     code = 0
+    lines = []
     for client in load_clients(config_path):
         name, db_id = client["klient"], client["odcinki_db"]
         try:
@@ -632,7 +675,20 @@ def poll_all(notion, config_path, dry_run, webhook):
             continue
         print(f"[{name}] odcinkow do posortowania: {len(pages)}")
         for page in pages:
-            code |= process_episode(notion, page["id"], dry_run, webhook, force=True, klient=name)
+            code |= process_episode(notion, page["id"], dry_run, webhook, force=True,
+                                    klient=name, collect=lines)
+        if pages:
+            try:
+                orphans = orphan_clips(notion, db_id)
+            except Exception as exc:  # noqa: BLE001 - to tylko dodatek do raportu
+                print(f"[{name}] nie udalo sie sprawdzic klipow bez odcinka: {str(exc)[:200]}")
+                orphans = {}
+            if orphans:
+                miss = "; ".join(f"{cam}: {fmt_nums(nums)}" for cam, nums in sorted(orphans.items()))
+                lines.append(f"UWAGA, {name}: klipy z ocena Git bez odcinka (nie zostaly posortowane): "
+                             f"{miss}. Przypisz je do odcinka w Notion i zaznacz tam 'Posortuj klipy' ponownie.")
+    if lines:
+        notify(webhook, "\n".join(lines))
     return code
 
 
