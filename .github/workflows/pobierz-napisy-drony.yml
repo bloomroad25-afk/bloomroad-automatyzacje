@@ -1,9 +1,9 @@
 name: Pobieranie napisow - Drony Dla Firmy
 
 on:
-  # Co godzine, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
+  # Co 15 minut, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
   schedule:
-    - cron: "37 4-20 * * *"
+    - cron: "6,21,36,51 4-20 * * *"
   # Reczne uruchomienie (test): Actions > Pobieranie napisow - Drony Dla Firmy > Run workflow.
   workflow_dispatch:
     inputs:
