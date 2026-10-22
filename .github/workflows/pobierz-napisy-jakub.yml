@@ -1,9 +1,9 @@
 name: Pobieranie napisow - Jakub Wolert
 
 on:
-  # Co godzine, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
+  # Co 15 minut, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
   schedule:
-    - cron: "22 4-20 * * *"
+    - cron: "9,24,39,54 4-20 * * *"
   # Reczne uruchomienie (test): Actions > Pobieranie napisow - Jakub Wolert > Run workflow.
   workflow_dispatch:
     inputs:
