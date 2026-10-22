@@ -1,14 +1,17 @@
 name: Pobieranie napisow
 
 on:
+  # Co 15 minut, mniej wiecej od 6:00 do 22:00 czasu polskiego (UTC 4-20).
   schedule:
-    - cron: "7 4-20 * * *"
+    - cron: "3,18,33,48 4-20 * * *"
+  # Reczne uruchomienie (test): Actions > Pobieranie napisow > Run workflow.
   workflow_dispatch:
     inputs:
       dry_run:
         description: "true = tylko sprawdza, nic nie zapisuje"
         default: "true"
 
+# Tylko jedno sprawdzanie naraz.
 concurrency:
   group: pobierz-napisy
   cancel-in-progress: false
