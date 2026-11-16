@@ -1,0 +1,33 @@
+name: Jednorazowo - klucze YouTube dla agenta (do usuniecia)
+
+# Szyfruje klucze YouTube kluczem publicznym repo agent-bloomroad (sealed box).
+# Odszyfrowac moze tylko GitHub w tamtym repo. Po uzyciu plik i log sa usuwane.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  szyfruj:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install pynacl
+      - name: Zaszyfruj
+        env:
+          T_BLOOMROAD: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          T_GEOSITE: ${{ secrets.YOUTUBE_TOKEN_GEOSITE }}
+          T_DRONY: ${{ secrets.YOUTUBE_TOKEN_DRONY }}
+          T_JAKUB: ${{ secrets.YOUTUBE_TOKEN_JAKUB }}
+          KEY: "onpQQJWDkm1vuJ9r0NG+o+pPD0cYbRy1ZMX0q2WU/wk="
+        run: |
+          python - <<'PY'
+          import base64, os
+          from nacl import encoding, public
+          box = public.SealedBox(public.PublicKey(os.environ["KEY"].encode(), encoding.Base64Encoder()))
+          for name in ["BLOOMROAD", "GEOSITE", "DRONY", "JAKUB"]:
+              value = os.environ.get("T_" + name, "")
+              if not value:
+                  print("BRAK", name)
+                  continue
+              print("SZYFR", name, base64.b64encode(box.encrypt(value.encode())).decode())
+          PY
