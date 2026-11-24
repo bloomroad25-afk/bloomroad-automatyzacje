@@ -1,0 +1,74 @@
+name: Pobieranie napisow - wszyscy klienci
+
+# Glowny zegar: cron-job.org co 15 minut wywoluje ten workflow przez
+# workflow_dispatch z dry_run=false (harmonogram GitHuba bywa martwy po kilka godzin).
+# Osobne workflowy pobierz-napisy-*.yml zostaja jako zapas.
+# Reczne uruchomienie (test): Actions > Pobieranie napisow - wszyscy klienci > Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = tylko sprawdza, nic nie zapisuje"
+        default: "true"
+
+# Tylko jedno sprawdzanie naraz.
+concurrency:
+  group: napisy-wszyscy
+  cancel-in-progress: false
+
+jobs:
+  sprawdz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      # "if: always()": kazdy klient jest sprawdzany, nawet gdy poprzedni mial blad.
+      - name: Napisy - Bloomroad
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          DATA_SOURCE_ID: "8acda0c0-34ea-4d34-ba8b-66813e207849"
+          NAPISY_DATA_SOURCE_ID: "5266ccfa-636c-42bc-b6d3-aa334ef74050"
+      - name: Napisy - Drony Dla Firmy
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_DRONY }}
+          DATA_SOURCE_ID: "07faa39a-2613-4500-8308-c4e2dd17c6a6"
+          NAPISY_DATA_SOURCE_ID: "5266ccfa-636c-42bc-b6d3-aa334ef74050"
+      - name: Napisy - Jakub Wolert
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JAKUB }}
+          DATA_SOURCE_ID: "f9ba4c1c-5a3c-4ab1-9cc2-0f5b4469059c"
+          NAPISY_DATA_SOURCE_ID: "6023a820-b4e0-40f4-a9f0-6a5749bf72a8"
+      - name: Napisy - GeoSite
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_GEOSITE }}
+          DATA_SOURCE_ID: "9d765017-8105-4c72-9bff-6eee9ada509a"
+          NAPISY_DATA_SOURCE_ID: "28378b78-53ce-443d-9afb-7c170913e60a"
+      - name: Napisy - Woda Dla Firmy
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_WODA }}
+          DATA_SOURCE_ID: "37915a48-0ade-434b-81a8-1d04c495c514"
+          NAPISY_DATA_SOURCE_ID: "29f50a0b-7092-4af9-bffe-58867278c2ef"
+      - name: Napisy - Pavisorte
+        if: always()
+        run: python pobierz_napisy.py
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_PAVISORTE }}
+          DATA_SOURCE_ID: "85286936-83bb-4ae3-8592-5a7b7792bc5e"
+          NAPISY_DATA_SOURCE_ID: "617af5f4-f29d-4186-b37b-b7b5528917d3"
