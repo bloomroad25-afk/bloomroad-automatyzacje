@@ -311,7 +311,7 @@ def clean_client(notion, service_factory, client, days, max_per_run, dry_run, to
     except Exception as exc:  # noqa: BLE001
         lines.append(f"{name}: nie moge znalezc miejsca na archiwum: {str(exc)[:200]}")
         return lines
-    if not archive_id:
+    if not archive_id and dry_run:
         lines.append(f"{name}: strona \"{ARCHIVE_TITLE}\" jeszcze nie istnieje - powstanie przy pierwszym "
                      f"prawdziwym przebiegu.")
     for page in old:
